@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SAFEHER Emergency Dashboard</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Arial,sans-serif;background:#f5f7fb;color:#172033}
+header{background:linear-gradient(135deg,#8b1238,#e11d48);color:#fff;padding:24px}
+.wrap{max-width:900px;margin:auto;padding:18px}
+.card{background:#fff;border-radius:18px;padding:20px;margin:14px 0;box-shadow:0 6px 22px #0001}
+h1{margin:0}h2{margin-top:0}.status{padding:14px;border-radius:12px;background:#eef2f6;font-weight:700}
+.dot{display:inline-block;width:12px;height:12px;border-radius:50%;background:#e11d48;margin-right:8px}.on{background:#16a34a}
+button{border:0;border-radius:11px;padding:12px 16px;margin:5px;font-weight:700;cursor:pointer}
+.red{background:#e11d48;color:#fff}.green{background:#16a34a;color:#fff}.dark{background:#172033;color:#fff}.light{background:#e9edf3}
+button:disabled{opacity:.45}.alert{display:none;background:#ffe2e9;color:#9d1234;padding:15px;border-radius:12px;font-weight:800;margin-top:12px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+input{width:100%;padding:12px;border:1px solid #ccd3de;border-radius:10px;margin:4px 0}
+.log{background:#111827;color:#dce7f5;padding:13px;border-radius:10px;white-space:pre-wrap;min-height:100px}
+.small{font-size:13px;color:#687386;line-height:1.5}
+</style>
+</head>
+<body>
+<header><div class="wrap"><h1>🛡️ SAFEHER</h1><div>Smart Emergency Alert & Location System</div></div></header>
+<main class="wrap">
+<section class="card">
+<div class="status"><span id="dot" class="dot"></span><span id="status">Bluetooth disconnected</span></div>
+<button class="red" id="connect">Connect SAFEHER</button>
+<button class="light" id="disconnect" disabled>Disconnect</button>
+<button class="dark" id="test" disabled>Test Device</button>
+<button class="light" id="reset" disabled>Reset SOS</button>
+<button class="red" id="sos" disabled>🚨 SEND SOS</button>
+<div id="alert" class="alert">🚨 EMERGENCY SOS ACTIVATED</div>
+<p class="small">Open this page from HTTPS in Chrome/Edge. Select SAFEHER-DIAG in the Bluetooth chooser.</p>
+</section>
+
+<section class="card">
+<h2>Emergency Contacts</h2>
+<div class="grid">
+<input id="c1" placeholder="Contact 1 phone number">
+<input id="c2" placeholder="Contact 2 phone number">
+<input id="c3" placeholder="Contact 3 phone number">
+</div>
+<button class="dark" id="save">Save Contacts</button>
+<button class="red" id="sms">📱 Open Emergency SMS</button>
+</section>
+
+<section class="card">
+<h2>Location</h2>
+<div id="location">Location not requested</div>
+<button class="dark" id="loc">Get Current Location</button>
+</section>
+
+<section class="card">
+<h2>Activity</h2><div id="log" class="log">SAFEHER prototype ready.</div>
+</section>
+</main>
+
+<script>
+const SERVICE="12345678-1234-1234-1234-123456789001";
+const CHAR="12345678-1234-1234-1234-123456789002";
+let device=null, characteristic=null;
+
+const $=id=>document.getElementById(id);
+function log(x){$("log").textContent+="\n"+new Date().toLocaleTimeString()+"  "+x}
+function ui(on){
+ $("dot").className="dot"+(on?" on":"");
+ $("status").textContent=on?"Bluetooth connected":"Bluetooth disconnected";
+ ["disconnect","test","reset","sos"].forEach(id=>$(id).disabled=!on);
+}
+function notification(e){
+ const msg=new TextDecoder().decode(e.target.value).trim();
+ log("Device: "+msg);
+ if(msg==="SOS"){ $("alert").style.display="block"; navigator.vibrate?.([300,150,300]); getLocation(true); }
+ if(msg==="RESET") $("alert").style.display="none";
+}
+async function connect(){
+ try{
+  if(!window.isSecureContext) throw Error("HTTPS required. Do not open with file://");
+  if(!navigator.bluetooth) throw Error("Use Chrome or Edge with Web Bluetooth");
+  $("status").textContent="Selecting SAFEHER…";
+  device=await navigator.bluetooth.requestDevice({
+   filters:[{name:"SAFEHER-DIAG"}],
+   optionalServices:[SERVICE]
+  });
+  device.addEventListener("gattserverdisconnected",()=>{characteristic=null;ui(false);log("Bluetooth disconnected")});
+  const server=await device.gatt.connect();
+  const service=await server.getPrimaryService(SERVICE);
+  characteristic=await service.getCharacteristic(CHAR);
+  await characteristic.startNotifications();
+  characteristic.addEventListener("characteristicvaluechanged",notification);
+  ui(true);log("Connected to SAFEHER-DIAG");
+ }catch(e){ui(false);log("Connection error: "+e.message);$("status").textContent="Connection failed"}
+}
+async function send(cmd){
+ if(!characteristic){log("Connect SAFEHER first");return}
+ try{await characteristic.writeValue(new TextEncoder().encode(cmd));log("Sent: "+cmd)}
+ catch(e){log("Command error: "+e.message)}
+}
+function save(){
+ localStorage.setItem("safeher_contacts",JSON.stringify([$("c1").value.trim(),$("c2").value.trim(),$("c3").value.trim()].filter(Boolean)));
+ log("Emergency contacts saved");
+}
+function load(){
+ try{let a=JSON.parse(localStorage.getItem("safeher_contacts")||"[]");["c1","c2","c3"].forEach((id,i)=>$(id).value=a[i]||"")}catch(e){}
+}
+function getLocation(auto=false){
+ if(!navigator.geolocation){$("location").textContent="Location unavailable";return}
+ $("location").textContent="Getting location…";
+ navigator.geolocation.getCurrentPosition(p=>{
+  const url="https://maps.google.com/?q="+p.coords.latitude+","+p.coords.longitude;
+  $("location").innerHTML='<a target="_blank" href="'+url+'">View current location on Google Maps</a>';
+  localStorage.setItem("safeher_location",url);log("Location received");
+ },e=>{$("location").textContent="Location permission denied/unavailable";log("Location error")},{enableHighAccuracy:true,timeout:10000});
+}
+function sms(){
+ save();
+ let a=JSON.parse(localStorage.getItem("safeher_contacts")||"[]");
+ if(!a.length){log("Add an emergency contact first");return}
+ let loc=localStorage.getItem("safeher_location")||"Please share your current location.";
+ let body="SAFEHER EMERGENCY ALERT! Please contact me immediately. Location: "+loc;
+ location.href="sms:"+encodeURIComponent(a[0])+"?body="+encodeURIComponent(body);
+}
+$("connect").onclick=connect;
+$("disconnect").onclick=()=>device?.gatt?.disconnect();
+$("test").onclick=()=>send("TEST");
+$("reset").onclick=()=>{ $("alert").style.display="none";send("RESET") };
+$("sos").onclick=()=>send("SOS");
+$("save").onclick=save;
+$("sms").onclick=sms;
+$("loc").onclick=()=>getLocation(false);
+load();
+</script>
+</body>
+</html>
